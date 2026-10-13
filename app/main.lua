@@ -5,6 +5,7 @@ local Tilt = require("ddc.tilt")
 local Settings = require("ddc.settings")
 local STR = require("ddc.strings")
 local R = require("ddc.render")
+local VERSION = require("ddc.version")
 
 -- Start each GC cycle at 1.5x the live heap (default 2x) so the peak stays well inside
 -- the memory budget instead of hitting it and forcing an emergency collection mid-frame.
@@ -300,6 +301,7 @@ local function draw()
       R.center(100, msg)
       if now - state_t0 > CAL_SKIP_US then R.center(170, t.cal_skip, R.C.dim) end
     elseif state == "title" then
+      gfx.text(4, 4, "v" .. VERSION, R.C.dim)
       R.center(36, t.title, R.C.gold)
       R.center(56, t.subtitle, R.C.accent)
       R.center(76, ("%s %d"):format(t.best, best), R.C.dim)
