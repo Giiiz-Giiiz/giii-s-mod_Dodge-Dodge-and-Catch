@@ -1,0 +1,34 @@
+# API Gap（制作中に見つかった OS／SDK の不足）
+
+形式は GiiiCon の [API 成熟度](https://github.com/Giiiz-Giiiz/GiiiCon/blob/main/docs/os/api-maturity.md) に合わせる。対象：SDK 0.2.1、Lua ABI 1（`giiicon.lock` の commit）。GiiiCon 側の `docs/api-gaps.md` にはまだ登録していない。
+
+| ID / 状態 | 体験・再現 | 提案 | ゲーム側の今の扱い |
+|---|---|---|---|
+| gap.lua.sensor_batch / open | `giii.sensors.read` は最新の 1 sample しか返さない。実機の IMU は 100 Hz、Lua の tick は約 30 fps なので、ジャイロの sample の約 2/3 が届かない | 前回以降の sample を時刻つきで返す `giii.sensors.drain(h, max)`。または FIFO を読む | 最新の角速度を sample 間隔のあいだ一定とみなして積分する（近似）。加速度の補正でドリフトは抑えるが、速い振りの角度は欠ける |
+| gap.lua.sensor_flags / open | Lua の sample に flags（SIMULATED・RAW・SCREEN）が無い。購読時に RAW を選べない | sample に `flags` を足す。`open(kind, hz, {raw=true})` | 再生か実機かを診断に出せない。OS の校正済みの値の上に、アプリでも残りのバイアスを測る |
+| gap.sdk.motion / open | 6 軸の傾き推定・中立の持ち方・入力の形（遊び・カーブ）を、アプリが自前で持つ必要がある。OS の orientation（Mahony の quaternion）は磁気も使い、中立との差を返さない | SDK の共通 module（例 `giii.motion`）：重力ベクトル、アプリ単位の中立、相対 roll/pitch、mapping。このゲームの `tilt.lua` を実機で測ってから提案する | `app/ddc/tilt.lua` に実装。ゲームの規則に依存しない純 Lua なので、そのまま SDK に移せる |
+| gap.lua.locale / open | Lua からシステムの言語を取れない | `giii.locale()` | ゲームの設定に「言語」を置く |
+| gap.lua.app_settings / open | OS は app の `settings.json` を登録できる（#24）が、Lua から値を読めない | `giii.settings.get(name)` と変更 event | 自分の save slot に保存する。感度・反転を共有 profile に出せない |
+| gap.lua.orientation_order / open | `orientation` の quaternion は (w, x, y, z) だが、Lua では `x, y, z, w` の名前で入る（`x` が w） | 名前を `w, x, y, z` に揃えるか、文書に明記 | 使っていない |
+
+## 実機で見つかった OS の不具合（2026-10-12、CoreS3 Lite）
+
+GiiiCon で直し、実機で確かめた（GiiiCon 0.2.000 に入っている）。
+
+| 症状 | 原因 | 修正 |
+|---|---|---|
+| `giii install` が「needs SDK 0.2.0, target OS has 0.0.1」で拒否する | USB の device info が `sdk = 1` 固定（本体の検査は 0.2.1 を使う） | `firmware/main/usb_glue.c`・`examples/usb_sim/main.c` で `GIII_SDK_VERSION` を返す |
+| すべての Lua アプリが `GIII_ERR_NO_MEM`（理由なし）で起動しない | Lua 用の 32 KB スタックを初回起動時に内部 RAM から取るが、Wi-Fi 起動後は最大の連続領域が 31.7 KB | `lua_glue.c` で起動時に確保。足りなければ空き量をログに出す |
+| 上の修正のあと store が `store disabled (memory)` | store のキュー（約 35 KB）が内部 RAM | `store_glue.c` で PSRAM に置く |
+| `giii.sensors.open` が `GIII_ERR_INVALID_ARG` | `lua_glue.c` が購読フラグに sample フラグ `GIII_SF_SCREEN`（0x04）を渡していた | `GIII_SUB_SCREEN_FRAME` を渡す |
+| `giii install` の転送が途中で止まる（4092 B の chunk） | 1 フレームが本体の受信バッファ 4 KB を超え、取りこぼす | 本体の max_payload を 1024 に（78 KB を 5.5 秒） |
+
+未解決：
+
+- 起動してしばらくたつと、タッチが効かなくなるらしい。再起動の直後は効く。原因は未調査。
+
+## 実機で確かめること（Issue #3）
+
+- 画面の screen frame で、右を下げると角速度 y が正、加速度 x が負になるか（`tests/test_tilt.lua` の前提）。
+- 30 fps で最新 sample だけを積分したときの角度の欠けと、遅延。
+- 静止時のドリフトと、バイアス校正（0.6 秒、閾値 0.06 rad/s）が手持ちで通るか。
